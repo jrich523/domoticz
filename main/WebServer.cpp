@@ -39,7 +39,9 @@
 #include "../json/json.h"
 #include "Logger.h"
 #include "SQLHelper.h"
+#include "../push/BasePush.h"
 #include <algorithm>
+
 
 #ifndef WIN32
 #include <sys/utsname.h>
@@ -81,6 +83,7 @@ static const _tGuiLanguage guiLanguage[] =
 	{ "cs", "Czech" },
 	{ "da", "Danish" },
 	{ "nl", "Dutch" },
+	{ "et", "Estonian" },
 	{ "de", "German" },
 	{ "el", "Greek" },
 	{ "fr", "French" },
@@ -90,6 +93,7 @@ static const _tGuiLanguage guiLanguage[] =
 	{ "is", "Icelandic" },
 	{ "it", "Italian" },
 	{ "lt", "Lithuanian" },
+	{ "lv", "Latvian" },
 	{ "mk", "Macedonian" },
 	{ "no", "Norwegian" },
 	{ "pl", "Polish" },
@@ -419,6 +423,12 @@ namespace http {
 			RegisterCommandCode("savefibarolink", boost::bind(&CWebServer::Cmd_SaveFibaroLink, this, _1, _2, _3));
 			RegisterCommandCode("deletefibarolink", boost::bind(&CWebServer::Cmd_DeleteFibaroLink, this, _1, _2, _3));
 
+			RegisterCommandCode("saveinfluxlinkconfig", boost::bind(&CWebServer::Cmd_SaveInfluxLinkConfig, this, _1, _2, _3));
+			RegisterCommandCode("getinfluxlinkconfig", boost::bind(&CWebServer::Cmd_GetInfluxLinkConfig, this, _1, _2, _3));
+			RegisterCommandCode("getinfluxlinks", boost::bind(&CWebServer::Cmd_GetInfluxLinks, this, _1, _2, _3));
+			RegisterCommandCode("saveinfluxlink", boost::bind(&CWebServer::Cmd_SaveInfluxLink, this, _1, _2, _3));
+			RegisterCommandCode("deleteinfluxlink", boost::bind(&CWebServer::Cmd_DeleteInfluxLink, this, _1, _2, _3));
+
 			RegisterCommandCode("savehttplinkconfig", boost::bind(&CWebServer::Cmd_SaveHttpLinkConfig, this, _1, _2, _3));
 			RegisterCommandCode("gethttplinkconfig", boost::bind(&CWebServer::Cmd_GetHttpLinkConfig, this, _1, _2, _3));
 			RegisterCommandCode("gethttplinks", boost::bind(&CWebServer::Cmd_GetHttpLinks, this, _1, _2, _3));
@@ -612,6 +622,7 @@ namespace http {
 			m_pWebEm->RegisterPageCode("/ozwcp/topopost.html", boost::bind(&CWebServer::ZWaveCPGetTopo, this, _1, _2, _3));
 			m_pWebEm->RegisterPageCode("/ozwcp/statpost.html", boost::bind(&CWebServer::ZWaveCPGetStats, this, _1, _2, _3));
 			m_pWebEm->RegisterPageCode("/ozwcp/grouppost.html", boost::bind(&CWebServer::ZWaveCPSetGroup, this, _1, _2, _3));
+			m_pWebEm->RegisterPageCode("/ozwcp/scenepost.html", boost::bind(&CWebServer::ZWaveCPSceneCommand, this, _1, _2, _3));
 			//
 			//pollpost.html
 			//scenepost.html
@@ -1678,7 +1689,7 @@ namespace http {
 			if (idx == "")
 				return;
 			std::vector<std::string> result;
-			result = m_mainworker.m_datapush.DropdownOptions(atoi(idx.c_str()));
+			result = CBasePush::DropdownOptions(atoi(idx.c_str()));
 			if ((result.size() == 1) && result[0] == "Status") {
 				root["result"][0]["Value"] = 0;
 				root["result"][0]["Wording"] = result[0];
@@ -1711,7 +1722,7 @@ namespace http {
 			if ((idx == "") || (pos == ""))
 				return;
 			std::string wording;
-			wording = m_mainworker.m_datapush.DropdownOptionsValue(atoi(idx.c_str()), atoi(pos.c_str()));
+			wording = CBasePush::DropdownOptionsValue(atoi(idx.c_str()), atoi(pos.c_str()));
 			root["wording"] = wording;
 			root["status"] = "OK";
 			root["title"] = "GetDeviceValueOptions";
@@ -5458,6 +5469,13 @@ namespace http {
 					root["result"][ii]["ptag"] = Notification_Type_Desc(NTYPE_USAGE, 1);
 					ii++;
 				}
+				if ((dType == pTypeGeneral) && (dSubType == sTypeZWaveAlarm))
+				{
+					root["result"][ii]["val"] = NTYPE_VALUE;
+					root["result"][ii]["text"] = Notification_Type_Desc(NTYPE_VALUE, 0);
+					root["result"][ii]["ptag"] = Notification_Type_Desc(NTYPE_VALUE, 1);
+					ii++;
+				}
 				if ((dType == pTypeRego6XXValue) && (dSubType == sTypeRego6XXStatus))
 				{
 					root["result"][ii]["val"] = NTYPE_SWITCH_ON;
@@ -6488,6 +6506,9 @@ namespace http {
 			}
 			else if (cparam == "brightnessup")
 			{
+				root["status"] = "OK";
+                root["title"] = "Set brightness up!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6504,6 +6525,9 @@ namespace http {
 			}
 			else if (cparam == "brightnessdown")
 			{
+				root["status"] = "OK";
+                root["title"] = "Set brightness down!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6520,6 +6544,9 @@ namespace http {
 			}
 			else if (cparam == "discomode")
 			{
+				root["status"] = "OK";
+                root["title"] = "Set to last known disco mode!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6534,8 +6561,32 @@ namespace http {
 
 				m_mainworker.SwitchLight(ID, "Disco Mode", 0, -1, false, 0);
 			}
+			else if (cparam.find("discomodenum") == 0 && cparam != "discomode" && cparam.size()==13)
+			{
+				root["status"] = "OK";
+                root["title"] = "Set to disco mode!";
+
+				std::string idx = request::findValue(&req, "idx");
+
+				if (idx == "")
+				{
+					return;
+				}
+
+				uint64_t ID;
+				std::stringstream s_strid;
+				s_strid << idx;
+				s_strid >> ID;
+
+				char szTmp[40];
+			    sprintf(szTmp,"Disco Mode %s",cparam.substr(12).c_str());
+				m_mainworker.SwitchLight(ID, szTmp, 0, -1, false, 0);
+			}
 			else if (cparam == "discoup")
 			{
+				root["status"] = "OK";
+				root["title"] = "Set to next disco mode!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6552,6 +6603,9 @@ namespace http {
 			}
 			else if (cparam == "discodown")
 			{
+				root["status"] = "OK";
+				root["title"] = "Set to previous disco mode!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6568,6 +6622,9 @@ namespace http {
 			}
 			else if (cparam == "speedup")
 			{
+				root["status"] = "OK";
+				root["title"] = "Set disco speed up!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6584,6 +6641,10 @@ namespace http {
 			}
 			else if (cparam == "speeduplong")
 			{
+
+				root["status"] = "OK";
+                root["title"] = "Set speed long!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6600,6 +6661,9 @@ namespace http {
 			}
 			else if (cparam == "speeddown")
 			{
+				root["status"] = "OK";
+				root["title"] = "Set disco speed down!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6616,6 +6680,9 @@ namespace http {
 			}
 			else if (cparam == "warmer")
 			{
+				root["status"] = "OK";
+				root["title"] = "Set Kelvin up!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6632,6 +6699,9 @@ namespace http {
 			}
 			else if (cparam == "cooler")
 			{
+				root["status"] = "OK";
+				root["title"] = "Set Kelvin down!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6648,6 +6718,9 @@ namespace http {
 			}
 			else if (cparam == "fulllight")
 			{
+				root["status"] = "OK";
+				root["title"] = "Set Full!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6664,6 +6737,9 @@ namespace http {
 			}
 			else if (cparam == "nightlight")
 			{
+				root["status"] = "OK";
+                root["title"] = "Set to nightlight!";
+
 				std::string idx = request::findValue(&req, "idx");
 
 				if (idx == "")
@@ -6677,6 +6753,25 @@ namespace http {
 				s_strid >> ID;
 
 				m_mainworker.SwitchLight(ID, "Set Night", 0, -1,false,0);
+			}
+			else if (cparam == "whitelight")
+			{
+				root["status"] = "OK";
+                root["title"] = "Set to clear white!";
+
+				std::string idx = request::findValue(&req, "idx");
+
+				if (idx == "")
+				{
+					return;
+				}
+
+				uint64_t ID;
+				std::stringstream s_strid;
+				s_strid << idx;
+				s_strid >> ID;
+
+				m_mainworker.SwitchLight(ID, "Set White", 0, -1,false,0);
 			}
 			else if (cparam == "getfloorplanimages")
 			{
@@ -9982,6 +10077,14 @@ namespace http {
 								}
 							}
 							root["result"][ii]["Modes"] = modes;
+						}
+						else if (dSubType == sTypeZWaveAlarm)
+						{
+							sprintf(szData, "Event: 0x%02X (%d)", nValue, nValue);
+							root["result"][ii]["Data"] = szData;
+							root["result"][ii]["TypeImg"] = "Alert";
+							root["result"][ii]["Level"] = nValue;
+							root["result"][ii]["HaveTimeout"] = false;
 						}
 					}
 					else if (dType == pTypeLux)
