@@ -170,6 +170,14 @@
 #define sSwitchBlindsT2				0x69
 #define sSwitchLightT2				0x70
 #define sSwitchContactT1			0x71
+#define sSwitchTypeYW_Secu			0x6a
+#define sSwitchTypeMertik_GV60		0x6b
+#define sSwitchTypeNingbo64			0x6c
+#define sSwitchTypeX2D				0x6d
+#define sSwitchTypeHRCMotor			0x6e
+#define sSwitchTypeVelleman			0x6f
+#define sSwitchTypeRFCustom			0x72
+#define sSwitchTypeYW_Sensor		0x73
 
 //Switch commands
 #define gswitch_sOff				0x00
@@ -393,6 +401,7 @@ typedef struct _tGeneralDevice {
 	float floatval2;
 	int32_t intval1;
 	int32_t intval2;
+	char text[64];
 	_tGeneralDevice()
 	{
 		len=sizeof(_tGeneralDevice)-1;
@@ -403,6 +412,7 @@ typedef struct _tGeneralDevice {
 		floatval2=0;
 		intval1=0;
 		intval2=0;
+		text[0] = 0;
 	}
 } GeneralDevice;
 
@@ -452,6 +462,12 @@ typedef struct _tP1Power {
 		type = pTypeP1Power;
 		subtype = sTypeP1Power;
 		ID = 1;
+		powerusage1 = 0;
+		powerusage2 = 0;
+		powerdeliv1 = 0;
+		powerdeliv2 = 0;
+		usagecurrent = 0;
+		delivcurrent = 0;
 	}
 } P1Power;
 
