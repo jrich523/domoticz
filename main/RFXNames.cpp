@@ -2,7 +2,7 @@
 #include "RFXNames.h"
 #include "RFXtrx.h"
 #include "../hardware/hardwaretypes.h"
-#include "../hardware/evohome.h"
+#include "../hardware/EvohomeBase.h"
 #include "Helper.h"
 #include <boost/algorithm/string.hpp>
 #include "Logger.h"
@@ -169,7 +169,7 @@ const char *Hardware_Type_Desc(int hType)
 		{ HTYPE_PiFace, "PiFace - Raspberry Pi IO expansion board" },
 		{ HTYPE_S0SmartMeterUSB, "S0 Meter USB" },
 		{ HTYPE_OpenThermGateway, "OpenTherm Gateway USB" },
-		{ HTYPE_TeleinfoMeter, "Teleinfo EDF USB" },
+		{ HTYPE_TeleinfoMeter, "Teleinfo EDF" },
 		{ HTYPE_OpenThermGatewayTCP, "OpenTherm Gateway with LAN interface" },
 		{ HTYPE_OpenZWave, "OpenZWave USB" },
 		{ HTYPE_LimitlessLights, "Limitless/AppLamp/Mi Light with LAN/WiFi interface" },
@@ -184,7 +184,7 @@ const char *Hardware_Type_Desc(int hType)
 		{ HTYPE_RaspberryGPIO, "Raspberry's GPIO port" },
 		{ HTYPE_Meteostick, "Meteostick USB" },
 		{ HTYPE_TOONTHERMOSTAT, "Toon Thermostat" },
-		{ HTYPE_ECODEVICES, "Eco Devices via LAN interface" },
+		{ HTYPE_ECODEVICES, "Eco Devices" },
 		{ HTYPE_HARMONY_HUB, "Logitech Harmony Hub" },
 		{ HTYPE_Mochad, "Mochad CM15Pro/CM19A bridge with LAN interface" },
 		{ HTYPE_Philips_Hue, "Philips Hue Bridge" },
@@ -224,7 +224,6 @@ const char *Hardware_Type_Desc(int hType)
 		{ HTYPE_AtagOne, "Atag One Thermostat" },
 		{ HTYPE_Sterbox, "Sterbox v2-3 PLC with LAN interface" },
 		{ HTYPE_HTTPPOLLER, "HTTP/HTTPS poller" },
-		{ HTYPE_FITBIT, "Fitbit" },
 		{ HTYPE_RAVEn, "Rainforest RAVEn USB" },
 		{ HTYPE_S0SmartMeterTCP, "S0 Meter with LAN interface" },
 		{ HTYPE_DenkoviSmartdenLan, "Denkovi Smartden with LAN interface" },
@@ -249,6 +248,7 @@ const char *Hardware_Type_Desc(int hType)
 		{ HTYPE_IntergasInComfortLAN2RF, "Intergas InComfort LAN2RF Gateway" },
 		{ HTYPE_RelayNet, "Relay-Net 8 channel LAN Relay and binary Input module" },
 		{ HTYPE_KMTronicUDP, "KMTronic Gateway with LAN/UDP interface" },
+		{ HTYPE_SysfsGPIO, "Generic sysfs gpio" },
 		{ 0, NULL, NULL }
 	};
 	return findTableIDSingle1 (Table, hType);
@@ -866,6 +866,7 @@ const char *RFX_Type_SubType_Desc(const unsigned char dType, const unsigned char
 		{ pTypeGeneralSwitch, sSwitchTypeVelleman, "Velleman" },
 		{ pTypeGeneralSwitch, sSwitchTypeRFCustom, "RFCustom" },
 		{ pTypeGeneralSwitch, sSwitchTypeYW_Sensor, "YW_Sensor" },
+		{ pTypeGeneralSwitch, sSwitchTypeLegrandcad, "LEGRANDCAD" },
 		{  0,0,NULL }
 	};
 	return findTableID1ID2(Table, dType, sType);
@@ -1489,6 +1490,9 @@ void GetLightStatus(
 		case Limitless_SetBrightnessLevel:
 			lstatus="Set Level";
 			break;
+		case Limitless_SetKelvinLevel:
+			lstatus="Set Kelvin Level";
+			break;
 		case Limitless_SetColorToWhite:
 			lstatus="Set to White";
 			break;
@@ -1830,7 +1834,7 @@ void GetLightStatus(
 		break;
 	case pTypeEvohome:
 		llevel=0;
-		lstatus=CEvohome::GetWebAPIModeName(nValue);
+		lstatus=CEvohomeBase::GetWebAPIModeName(nValue);
 		break;
 	case pTypeEvohomeRelay:
 		bHaveDimmer=true;
@@ -2497,6 +2501,11 @@ bool GetLightCommand(
 			cmd=Limitless_SetBrightnessLevel;
 			return true;
 		}
+		else if (switchcmd=="Set Kelvin Level")
+		{
+			cmd=Limitless_SetKelvinLevel;
+			return true;
+		}
 		else if (switchcmd == "Set White")
 		{
 			cmd = Limitless_SetColorToWhite;
@@ -2595,6 +2604,16 @@ bool GetLightCommand(
 		else if (switchcmd == "Speed Down")
 		{
 			cmd = Limitless_DiscoSpeedSlower;
+			return true;
+		}
+		else if (switchcmd == "Speed Minimal")
+		{
+			cmd = Limitless_DiscoSpeedMinimal;
+			return true;
+		}
+		else if (switchcmd == "Speed Maximal")
+		{
+			cmd = Limitless_DiscoSpeedMaximal;
 			return true;
 		}
 		else if (switchcmd == "Warmer")
