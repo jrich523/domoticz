@@ -123,6 +123,8 @@
 #include "../hardware/InComfort.h"
 #include "../hardware/RelayNet.h"
 #include "../hardware/SysfsGpio.h"
+#include "../hardware/Rtl433.h"
+#include "../hardware/OnkyoAVTCP.h"
 
 // load notifications configuration
 #include "../notifications/NotificationHelper.h"
@@ -399,7 +401,7 @@ void MainWorker::RemoveDomoticzHardware(int HwdId)
 	if (dpos==-1)
 		return;
 	RemoveDomoticzHardware(m_hardwaredevices[dpos]);
-#ifdef USE_PYTHON_PLUGINS
+#ifdef ENABLE_PYTHON
 	m_pluginsystem.DeregisterPlugin(HwdId);
 #endif
 }
@@ -482,10 +484,9 @@ bool MainWorker::GetSunSettings()
 {
 	int nValue;
 	std::string sValue;
-	if (!m_sql.GetPreferencesVar("Location",nValue,sValue))
-		return false;
 	std::vector<std::string> strarray;
-	StringSplit(sValue, ";", strarray);
+	if (m_sql.GetPreferencesVar("Location",nValue,sValue))
+		StringSplit(sValue, ";", strarray);
 
 	if (strarray.size() != 2)
 	{
@@ -942,8 +943,8 @@ bool MainWorker::AddHardwareFromParams(
 #endif
 		break;
 	case HTYPE_SysfsGpio:
-#ifdef WITH_SYSFS_GPIO
-		pHardware = new CSysfsGpio(ID, Mode1);
+#ifdef WITH_GPIO
+		pHardware = new CSysfsGpio(ID, Mode1, Mode2);
 #endif
 		break;
 	case HTYPE_Comm5TCP:
@@ -976,7 +977,7 @@ bool MainWorker::AddHardwareFromParams(
 		pHardware = new Yeelight(ID);
 		break;
 	case HTYPE_PythonPlugin:
-#ifdef USE_PYTHON_PLUGINS
+#ifdef ENABLE_PYTHON
 		pHardware = m_pluginsystem.RegisterPlugin(ID, Name, Filename);
 #endif
 	    break;
@@ -994,6 +995,12 @@ bool MainWorker::AddHardwareFromParams(
 		break;
 	case HTYPE_EVOHOME_WEB:
 		pHardware = new CEvohomeWeb(ID, Username, Password, Mode1, Mode2, Mode3);
+		break;
+	case HTYPE_Rtl433:
+		pHardware = new CRtl433(ID);
+		break;
+	case HTYPE_OnkyoAVTCP:
+		pHardware = new OnkyoAVTCP(ID, Address, Port);
 		break;
 	}
 
@@ -1024,7 +1031,7 @@ bool MainWorker::Start()
 	m_notifications.Init();
 	GetSunSettings();
 	GetAvailableWebThemes();
-#ifdef USE_PYTHON_PLUGINS
+#ifdef ENABLE_PYTHON
 	m_pluginsystem.StartPluginSystem();
 #endif
 	AddAllDomoticzHardware();
@@ -1065,7 +1072,7 @@ bool MainWorker::Stop()
 		m_httppush.Stop();
 		m_influxpush.Stop();
 		m_googlepubsubpush.Stop();
-#ifdef USE_PYTHON_PLUGINS
+#ifdef ENABLE_PYTHON
 		m_pluginsystem.StopPluginSystem();
 #endif
 
@@ -1491,7 +1498,7 @@ void MainWorker::Do_Work()
 			{
 				m_bStartHardware=false;
 				StartDomoticzHardware();
-#ifdef USE_PYTHON_PLUGINS
+#ifdef ENABLE_PYTHON
 				m_pluginsystem.AllPluginsStarted();
 #endif
 				ParseRFXLogFile();
@@ -2065,25 +2072,6 @@ void MainWorker::ProcessRXMessage(const CDomoticzHardwareBase *pHardware, const 
 
 	const_cast<CDomoticzHardwareBase *>(pHardware)->SetHeartbeatReceived();
 
-	char szDate[100]; szDate[0] = 0;
-	struct timeval tv;
-	gettimeofday(&tv, NULL);
-	struct tm timeinfo;
-#ifdef WIN32
-	//Thanks to the winsock header file
-	time_t tv_sec = tv.tv_sec;
-	localtime_r(&tv_sec, &timeinfo);
-#else
-	localtime_r(&tv.tv_sec, &timeinfo);
-#endif
-	// create a time stamp string for the log message
-	if (_log.IsLogTimestampsEnabled())
-	{
-		snprintf(szDate, sizeof(szDate), "%04d-%02d-%02d %02d:%02d:%02d.%03d ",
-			timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-			timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, (int)tv.tv_usec / 1000);
-	}
-
 	uint64_t DeviceRowIdx = -1;
 	std::string DeviceName = "";
 	tcp::server::CTCPClient *pClient2Ignore = NULL;
@@ -2372,15 +2360,13 @@ void MainWorker::ProcessRXMessage(const CDomoticzHardwareBase *pHardware, const 
 
 	if (pHardware->m_bOutputLog)
 	{
-		std::stringstream sTmp;
 		std::string sdevicetype = RFX_Type_Desc(pRXCommand[1], 1);
 		if (pRXCommand[1] == pTypeGeneral)
 		{
 			const _tGeneralDevice *pMeter = reinterpret_cast<const _tGeneralDevice*>(pRXCommand);
 			sdevicetype += "/" + std::string(RFX_Type_SubType_Desc(pMeter->type, pMeter->subtype));
 		}
-		if (szDate[0] != 0)
-			sTmp << szDate << " ";
+		std::stringstream sTmp;
 		sTmp << "(" << pHardware->Name << ") " << sdevicetype << " (" << DeviceName << ")";
 		WriteMessageStart();
 		WriteMessage(sTmp.str().c_str());
@@ -9773,6 +9759,10 @@ void MainWorker::decode_General(const int HwdID, const _eHardwareTypes HwdType, 
 			return;
 		m_notifications.CheckAndHandleValueNotification(DevRowIdx, procResult.DeviceName, pMeter->intval2);
 	}
+	else if (subType == sTypeTextStatus)
+	{
+		DevRowIdx = m_sql.UpdateValue(HwdID, ID.c_str(), Unit, devType, subType, SignalLevel, BatteryLevel, pMeter->text, procResult.DeviceName);
+	}
 
 	if (m_verboselevel >= EVBL_ALL)
 	{
@@ -9886,6 +9876,11 @@ void MainWorker::decode_General(const int HwdID, const _eHardwareTypes HwdType, 
 		case sTypeZWaveAlarm:
 			WriteMessage("subtype       = Alarm");
 			sprintf(szTmp, "Level = %d (0x%02X)", pMeter->intval2, pMeter->intval2);
+			WriteMessage(szTmp);
+			break;
+		case sTypeTextStatus:
+			WriteMessage("subtype       = Text");
+			sprintf(szTmp, "Text = %s", pMeter->text);
 			WriteMessage(szTmp);
 			break;
 		default:
@@ -10846,7 +10841,7 @@ bool MainWorker::SwitchLightInt(const std::vector<std::string> &sd, std::string 
 	//
 	if (pHardware->HwdType == HTYPE_PythonPlugin)
 	{
-#ifdef USE_PYTHON_PLUGINS
+#ifdef ENABLE_PYTHON
 		((Plugins::CPlugin*)m_hardwaredevices[hindex])->SendCommand(Unit, switchcmd, level, hue);
 #endif
 		return true;
@@ -11620,16 +11615,19 @@ bool MainWorker::SwitchLightInt(const std::vector<std::string> &sd, std::string 
 		return true;
 	case pTypeGeneralSwitch:
 		{
+
 			_tGeneralSwitch gswitch;
 			gswitch.type = dType;
 			gswitch.subtype = dSubType;
 			gswitch.seqnbr = m_hardwaredevices[hindex]->m_SeqNr++;
 			gswitch.id = ID;
 			gswitch.unitcode = Unit;
+
 			if (!GetLightCommand(dType, dSubType, switchtype, switchcmd, gswitch.cmnd, options))
 				return false;
 
-			if ((switchtype != STYPE_Selector) && (dSubType != sSwitchGeneralSwitch)) {
+			if ((switchtype != STYPE_Selector) && (dSubType != sSwitchGeneralSwitch))
+			{
 				level = (level > 99) ? 99 : level;
 			}
 
@@ -11659,6 +11657,10 @@ bool MainWorker::SwitchLightInt(const std::vector<std::string> &sd, std::string 
 					}
 				}
 			}
+			else if (((switchtype == STYPE_BlindsPercentage) ||
+					(switchtype == STYPE_BlindsPercentageInverted)) &&
+					(gswitch.cmnd == gswitch_sSetLevel) && (level == 100))
+						gswitch.cmnd = gswitch_sOn;
 
 			gswitch.level = (unsigned char)level;
 			gswitch.rssi = 12;
@@ -11901,7 +11903,7 @@ bool MainWorker::SetSetPointInt(const std::vector<std::string> &sd, const float 
 	//
 	if (pHardware->HwdType == HTYPE_PythonPlugin)
 	{
-#ifdef USE_PYTHON_PLUGINS
+#ifdef ENABLE_PYTHON
 		((Plugins::CPlugin*)pHardware)->SendCommand(Unit, "Set Level", TempValue);
 #endif
 	}
@@ -12017,7 +12019,7 @@ bool MainWorker::SetSetPointInt(const std::vector<std::string> &sd, const float 
 			if (tSign == 'F')
 			{
 				//Convert to Celsius
-				tempDest = (tempDest - 32.0f) / 1.8f;
+				tempDest = static_cast<float>(ConvertToCelsius(tempDest));
 			}
 
 			_tThermostat tmeter;
@@ -12382,6 +12384,14 @@ bool MainWorker::SwitchScene(const uint64_t idx, const std::string &switchcmd)
 
 	_log.Log(LOG_NORM, "Activating Scene/Group: [%s]", Name.c_str());
 
+	if (!m_sql.m_bDisableEventSystem)
+	{
+		std::stringstream ssLastUpdate;
+		ssLastUpdate << (ltime.tm_year + 1900) << "-" << std::setw(2) << std::setfill('0') << (ltime.tm_mon + 1) << "-" << std::setw(2) << std::setfill('0') << ltime.tm_mday
+		<< " " << std::setw(2) << std::setfill('0') << ltime.tm_hour << ":" << std::setw(2) << std::setfill('0') << ltime.tm_min << ":" << std::setw(2) << std::setfill('0') << ltime.tm_sec;
+		m_eventsystem.UpdateScenesGroups(idx, nValue, ssLastUpdate.str());
+	}
+
 	//now switch all attached devices, and only the onces that do not trigger a scene
 	result = m_sql.safe_query(
 		"SELECT DeviceRowID, Cmd, Level, Hue, OnDelay, OffDelay FROM SceneDevices WHERE (SceneRowID == %" PRIu64 ") ORDER BY [Order] ASC", idx);
@@ -12487,7 +12497,6 @@ bool MainWorker::SwitchScene(const uint64_t idx, const std::string &switchcmd)
 			sleep_milliseconds(50);
 		}
 	}
-
 	return true;
 }
 
@@ -12968,6 +12977,19 @@ bool MainWorker::UpdateDevice(const int HardwareID, const std::string &DeviceID,
 				m_notifications.CheckAndHandleNotification(devidx, devname, devType, subType, NTYPE_USAGE, static_cast<float>(nValue));
 				return true;
 			}
+			else if (subType == sTypeTextStatus)
+			{
+				std::string sstatus = sValue;
+				if (sstatus.size() > 63)
+					sstatus = sstatus.substr(0, 63);
+				_tGeneralDevice gDevice;
+				gDevice.subtype = subType;
+				gDevice.id = unit;
+				gDevice.intval1 = static_cast<int>(ID);
+				strcpy(gDevice.text, sstatus.c_str());
+				DecodeRXMessage(pHardware, (const unsigned char *)&gDevice, NULL, batterylevel);
+				return true;
+			}
 		}
 		else if ((devType == pTypeAirQuality) && (subType == sTypeVoltcraft))
 		{
@@ -12977,7 +12999,42 @@ bool MainWorker::UpdateDevice(const int HardwareID, const std::string &DeviceID,
 		else if (devType == pTypeTEMP)
 		{
 			if (dID != 0)
+			{
 				m_notifications.CheckAndHandleNotification(dID, dName, devType, subType, NTYPE_TEMPERATURE, (float)atof(sValue.c_str()));
+			}
+		}
+		else if (devType == pTypeTEMP_HUM)
+		{
+			if (dID != 0)
+			{
+				std::vector<std::string> strarray;
+				StringSplit(sValue, ";", strarray);
+				if (strarray.size() == 3)
+				{
+					float Temp = (float)atof(strarray[0].c_str());
+					int Hum = atoi(strarray[1].c_str());
+					m_notifications.CheckAndHandleTempHumidityNotification(dID, dName, Temp, Hum, true, true);
+					float dewpoint = (float)CalculateDewPoint(Temp, Hum);
+					m_notifications.CheckAndHandleDewPointNotification(dID, dName, Temp, dewpoint);
+				}
+			}
+		}
+		else if (devType == pTypeTEMP_HUM_BARO)
+		{
+			if (dID != 0)
+			{
+				std::vector<std::string> strarray;
+				StringSplit(sValue, ";", strarray);
+				if (strarray.size() == 5)
+				{
+					float Temp = (float)atof(strarray[0].c_str());
+					int Hum = atoi(strarray[1].c_str());
+					m_notifications.CheckAndHandleTempHumidityNotification(dID, dName, Temp, Hum, true, true);
+					float dewpoint = (float)CalculateDewPoint(Temp, Hum);
+					m_notifications.CheckAndHandleDewPointNotification(dID, dName, Temp, dewpoint);
+					m_notifications.CheckAndHandleNotification(dID, dName, devType, subType, NTYPE_BARO, (float)atof(strarray[3].c_str()));
+				}
+			}
 		}
 /*
 		else if (devType == pTypeGeneralSwitch)
